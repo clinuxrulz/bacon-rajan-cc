@@ -14,6 +14,7 @@ use cc_box_ptr::{CcBoxPtr, free};
 use super::Color;
 
 thread_local!(static ROOTS: RefCell<Vec<NonNull<dyn CcBoxPtr>>> = RefCell::new(vec![]));
+thread_local!(static TO_BE_FREED: RefCell<Vec<NonNull<dyn CcBoxPtr>>> = RefCell::new(vec![]));
 
 #[doc(hidden)]
 pub fn add_root(box_ptr: NonNull<dyn CcBoxPtr>) {
@@ -220,7 +221,12 @@ fn mark_roots() {
                 box_ptr.data().buffered.set(false);
 
                 if box_ptr.color() == Color::Black && box_ptr.strong() == 0 {
-                    free(s);
+                    // Defer any drop calls, so that scan_black can properly restore reference counts
+                    // of those touched by mark_grey.
+                    TO_BE_FREED.with(|r| {
+                        let mut vec = r.borrow_mut();
+                        vec.push(s);
+                    });
                 }
 
                 false
@@ -325,6 +331,24 @@ fn collect_roots() {
             } else {
                 // undo s.inc_weak() from collect_white
                 i.as_ref().dec_weak();
+            }
+        }
+    }
+
+    // Perform any deferred free calls.
+    let mut to_be_freed = Vec::new();
+    TO_BE_FREED.with(|r| {
+        let mut vec = r.borrow_mut();
+        std::mem::swap(&mut to_be_freed, &mut vec);
+    });
+    for i in &to_be_freed {
+        unsafe { free(*i); }
+    }
+    for i in &to_be_freed {
+        unsafe {
+            // Only deallocate if our weak reference is the only one.
+            if i.as_ref().weak() == 1 {
+                crate::deallocate(*i);
             }
         }
     }
