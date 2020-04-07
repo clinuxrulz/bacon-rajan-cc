@@ -339,7 +339,7 @@ fn collect_roots() {
     let mut to_be_freed = Vec::new();
     TO_BE_FREED.with(|r| {
         let mut vec = r.borrow_mut();
-        std::mem::swap(&mut to_be_freed, &mut vec);
+        to_be_freed.append(&mut vec);
     });
     for i in &to_be_freed {
         unsafe { free(*i); }
